@@ -43,6 +43,13 @@ export function getActiveSessionCount(): number {
 }
 
 /**
+ * getActiveSessions — Get all active session keys (for /cogstatus command)
+ */
+export function getActiveSessions(): ReadonlySet<string> {
+    return activeSessions;
+}
+
+/**
  * createStateManagerService — Create the rolling plan state manager OpenClaw service
  *
  * This service is responsible for:

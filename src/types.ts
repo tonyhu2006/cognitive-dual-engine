@@ -349,17 +349,18 @@ export interface OpenClawService {
   stop(): void | Promise<void>;
 }
 
-/** OpenClaw 自动回复命令 */
+/** OpenClaw auto-reply command */
 export interface OpenClawCommand {
   name: string;
   description: string;
   acceptsArgs?: boolean;
   requireAuth?: boolean;
   handler(ctx: {
-    sessionKey?: string;
     senderId?: string;
     channel: string;
+    isAuthorizedSender: boolean;
     args?: string;
+    commandBody?: string;
     config: Record<string, unknown>;
   }): { text: string } | Promise<{ text: string }>;
 }

@@ -27,7 +27,7 @@ import type {
 } from "./src/types.js";
 import { createCognitiveAssessTool, createFlarePlanTool } from "./src/tools.js";
 import { getRollingPlanState } from "./src/rolling-planner.js";
-import { createStateManagerService } from "./src/service.js";
+import { createStateManagerService, getActiveSessions, getActiveSessionCount } from "./src/service.js";
 import { bootstrapHookHandler } from "./src/hooks/bootstrap.hook.js";
 import { persistHookHandler } from "./src/hooks/persist.hook.js";
 
@@ -116,34 +116,45 @@ export default function register(api: OpenClawPluginApi): void {
     description: "View current cognitive routing state (meta-cognition score + plan steps)",
     acceptsArgs: false,
     requireAuth: true,
-    handler(ctx) {
-      const sessionKey = (ctx as Record<string, unknown>).sessionKey as string ?? "unknown";
-      const state = getRollingPlanState(sessionKey);
+    handler() {
+      const sessions = getActiveSessions();
+      const sessionCount = getActiveSessionCount();
 
-      if (!state) {
+      if (sessionCount === 0) {
         return {
           text:
-            "🧠 Cognitive Dual Engine Status: Session not initialized\n" +
-            "Send any message to trigger agent:bootstrap, then retry.",
+            "🧠 Cognitive Dual Engine Status: No active sessions\n" +
+            "Send a message to trigger cognitive_assess, then retry.",
         };
       }
 
-      const meta = state.lastCognitiveMetadata;
-      const tagEmoji =
-        meta?.tag === "SYSTEM_2_FLARE" ? "⚡ System 2 (FLARE)" : "💨 System 1 (Intuition)";
+      const lines: string[] = [
+        `🧠 **Cognitive Dual Engine Status**`,
+        `Active sessions: ${sessionCount}`,
+        `Config: threshold=${cfg.system2Threshold} | depth=${cfg.flareMaxDepth} | branch=${cfg.flareBranchFactor}`,
+        ``,
+      ];
 
-      return {
-        text:
-          `🧠 **Cognitive Dual Engine Status**\n` +
-          `Session: ${sessionKey}\n` +
-          `Current route: ${tagEmoji}\n` +
-          `Complexity score: ${meta?.complexity.score.toFixed(3) ?? "Not assessed"}\n` +
-          `Confidence: ${meta?.complexity.confidence.toFixed(2) ?? "N/A"}\n` +
-          `Plan steps: ${state.stepCount}\n` +
-          `Uncommitted hypotheses: ${state.uncommittedHypotheses.length}\n` +
-          `Latest observation: ${state.latestObservation.slice(0, 80) || "None"}\n` +
-          `\nThreshold: ${cfg.system2Threshold} | FLARE depth: ${cfg.flareMaxDepth} | Branch factor: ${cfg.flareBranchFactor}`,
-      };
+      for (const sessionKey of sessions) {
+        const state = getRollingPlanState(sessionKey);
+        if (!state) continue;
+
+        const meta = state.lastCognitiveMetadata;
+        const tag = meta?.tag === "SYSTEM_2_FLARE"
+          ? "⚡ System 2 (FLARE)"
+          : "💨 System 1 (Intuition)";
+
+        lines.push(
+          `--- Session: ${sessionKey} ---`,
+          `Route: ${tag}`,
+          `Score: ${meta?.complexity.score.toFixed(3) ?? "N/A"} | Confidence: ${meta?.complexity.confidence.toFixed(2) ?? "N/A"}`,
+          `Steps: ${state.stepCount} | Hypotheses: ${state.uncommittedHypotheses.length}`,
+          `Observation: ${state.latestObservation.slice(0, 80) || "None"}`,
+          ``,
+        );
+      }
+
+      return { text: lines.join("\n") };
     },
   });
 
