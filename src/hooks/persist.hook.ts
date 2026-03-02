@@ -1,54 +1,55 @@
 /**
  * @file src/hooks/persist.hook.ts
- * @description tool_result_persist 钩子处理器
+ * @description tool_result_persist hook handler
  *
- * 此钩子在每次工具执行结果被写入 session transcript 之前触发。
- * 用于执行 FLARE 论文中「有限承诺 (Limited Commitment)」的核心操作：
- *   1. 接收实际环境反馈（工具执行结果）
- *   2. 强制清空上一轮规划中的所有「未提交假设」
- *   3. 失效旧搜索树，确保下轮规划基于真实状态
+ * This hook fires before each tool execution result is written to the
+ * session transcript. It performs the core "Limited Commitment" operation
+ * from the FLARE paper:
+ *   1. Receives actual environment feedback (tool execution result)
+ *   2. Force-clears all "uncommitted hypotheses" from the previous planning round
+ *   3. Invalidates the old search tree to ensure fresh re-planning
  *
- * 语义映射：
- *   设计文档中的 afterActionExecution → 本钩子
- *   - tool_result_persist 在工具结果持久化前同步触发
- *   - 可读取 event.sessionKey 获取会话标识
- *   - 可修改 event.result 内容（本插件不修改，仅读取用于更新内部状态）
+ * Semantic mapping:
+ *   Design doc's afterActionExecution → this hook
+ *   - tool_result_persist fires synchronously before result persistence
+ *   - event.sessionKey provides the session identifier
+ *   - event.result can be modified (this plugin reads only, does not modify)
  *
- * 学术依据：
- *   FLARE 论文 §3.3 "Limited Commitment via Receding-Horizon Planning"
+ * Academic basis:
+ *   FLARE paper §3.3 "Limited Commitment via Receding-Horizon Planning"
  *   - "Limited commitment discards all hypotheses beyond the committed action,
  *      regardless of their apparent quality."
- *   - 此机制对早期估计误差具有数学意义上的鲁棒性
+ *   - This mechanism is mathematically robust to early estimation errors
  */
 
 import type { ToolResultPersistEvent } from "../types.js";
 import { onToolResultReceived } from "../rolling-planner.js";
 
 /**
- * persistHookHandler — tool_result_persist 事件处理器
+ * persistHookHandler — tool_result_persist event handler
  *
- * 每次工具执行完成、结果即将写入会话记录时触发。
- * 执行 Limited Commitment 状态清理：
- *   - 将工具结果记录为最新环境观测 (latestObservation)
- *   - 强制清空所有未提交假设 (uncommittedHypotheses)
- *   - 失效旧搜索树 (previousSearchTree → null)
+ * Fires after each tool execution, before the result is persisted to session log.
+ * Performs Limited Commitment state cleanup:
+ *   - Records tool result as latest environment observation (latestObservation)
+ *   - Force-clears all uncommitted hypotheses (uncommittedHypotheses)
+ *   - Invalidates old search tree (previousSearchTree → null)
  *
- * @param event tool_result_persist 事件对象
- * @returns undefined（不修改工具执行结果内容）
+ * @param event tool_result_persist event object
+ * @returns undefined (does not modify tool result content)
  */
 export function persistHookHandler(
     event: ToolResultPersistEvent,
 ): undefined {
-    // 提取工具执行结果内容
+    // Extract tool execution result content
     const resultContent =
         typeof event.result.content === "string"
             ? event.result.content
             : JSON.stringify(event.result.content);
 
-    // 执行有限承诺清理：
-    // 1. 更新最新环境观测
-    // 2. 强制清空未提交假设
-    // 3. 失效旧搜索树
+    // Execute Limited Commitment cleanup:
+    // 1. Update latest environment observation
+    // 2. Force-clear uncommitted hypotheses
+    // 3. Invalidate old search tree
     const { clearedHypothesesCount } = onToolResultReceived(
         event.sessionKey,
         resultContent,
@@ -56,15 +57,13 @@ export function persistHookHandler(
     );
 
     if (clearedHypothesesCount > 0) {
-        // 使用 console.info 而非 api.logger，因为 Hook handler 不直接接收 api 对象
-        // 在 OpenClaw 的 Hook 执行环境中，console 输出会被 Gateway 捕获并路由到日志系统
         console.info(
-            `[CognitiveDualEngine] Limited Commitment: 清理了 ${clearedHypothesesCount} 个未提交假设`,
+            `[CognitiveDualEngine] Limited Commitment: cleared ${clearedHypothesesCount} uncommitted hypotheses`,
         );
     }
 
-    // 返回 undefined 表示不修改工具结果内容
-    // 仅执行内部状态更新（滚动规划状态清理）
+    // Return undefined — do not modify tool result content
+    // Only perform internal state updates (rolling plan state cleanup)
     return undefined;
 }
 

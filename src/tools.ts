@@ -57,17 +57,17 @@ function createLLMSimulator(api: OpenClawPluginApi): LLMSimulator {
       // 在生产中，此处通过 api.runtime 调用底层 LLM
       // 并要求以 JSON 格式返回 n 个结构化候选动作
       api.logger.debug(
-        `[FLARE:Simulator] 为状态生成 ${n} 个候选动作`,
+        `[FLARE:Simulator] Generating ${n} candidate actions for current state`,
         { stateLength: currentState.length },
       );
 
       // 构造提示，要求 LLM 返回严格的 JSON 候选动作列表
       const prompt = [
-        `你正在帮助完成以下任务：\n${taskDescription}`,
-        `\n当前状态：\n${currentState}`,
-        `\n请生成 ${n} 个最合理的下一步候选动作，以 JSON 数组返回。`,
-        `每个元素包含：{ "id": string, "description": string, "type": "tool_call"|"reasoning_step"|"final_response", "priorScore": 0.0-1.0 }`,
-        `只返回 JSON 数组，不要其他内容。`,
+        `You are helping to complete the following task:\n${taskDescription}`,
+        `\nCurrent state:\n${currentState}`,
+        `\nPlease generate ${n} most reasonable next-step candidate actions, returned as a JSON array.`,
+        `Each element should contain: { "id": string, "description": string, "type": "tool_call"|"reasoning_step"|"final_response", "priorScore": 0.0-1.0 }`,
+        `Return only the JSON array, nothing else.`,
       ].join("\n");
 
       try {
@@ -87,20 +87,20 @@ function createLLMSimulator(api: OpenClawPluginApi): LLMSimulator {
           }
         }
       } catch (e) {
-        api.logger.warn("[FLARE:Simulator] 候选动作生成失败，使用兜底候选", e);
+        api.logger.warn("[FLARE:Simulator] Candidate action generation failed, using fallback candidates", e);
       }
 
       // 兜底：返回通用候选（保证树不为空）
       return [
         {
           id: `fallback_1`,
-          description: "进行更多信息收集与分析",
+          description: "Gather more information and analyze",
           type: "reasoning_step" as const,
           priorScore: 0.5,
         },
         {
           id: `fallback_2`,
-          description: "直接回答当前已知内容",
+          description: "Directly respond with currently known information",
           type: "final_response" as const,
           priorScore: 0.3,
         },
@@ -109,13 +109,13 @@ function createLLMSimulator(api: OpenClawPluginApi): LLMSimulator {
 
     async simulateStateTransition(currentState, action, taskDescription) {
       const prompt = [
-        `任务：${taskDescription}`,
-        `当前状态：${currentState}`,
-        `即将执行的动作：${action.description}（类型：${action.type}）`,
-        `请预测执行此动作后：`,
-        `1. 新的状态描述（nextState）`,
-        `2. 即时奖励估计 (immediateReward, 0.0-1.0，1.0表示这步动作直接达成目标)`,
-        `以 JSON 返回: { "nextState": string, "immediateReward": number }`,
+        `Task: ${taskDescription}`,
+        `Current state: ${currentState}`,
+        `Action about to execute: ${action.description} (type: ${action.type})`,
+        `Please predict after executing this action:`,
+        `1. The new state description (nextState)`,
+        `2. Immediate reward estimate (immediateReward, 0.0-1.0, where 1.0 means the action directly achieves the goal)`,
+        `Return as JSON: { "nextState": string, "immediateReward": number }`,
       ].join("\n");
 
       try {
@@ -133,21 +133,21 @@ function createLLMSimulator(api: OpenClawPluginApi): LLMSimulator {
           }
         }
       } catch (_) {
-        api.logger.warn("[FLARE:Simulator] 状态转移模拟失败，使用兜底估计");
+        api.logger.warn("[FLARE:Simulator] State transition simulation failed, using fallback estimate");
       }
 
       return {
-        nextState: `${currentState}\n[执行后] ${action.description}`,
+        nextState: `${currentState}\n[After execution] ${action.description}`,
         immediateReward: action.priorScore,
       };
     },
 
     async evaluateTerminalValue(state, taskDescription) {
       const prompt = [
-        `任务：${taskDescription}`,
-        `当前状态（模拟到达的叶节点）：${state}`,
-        `请评估：如果在此状态停止，任务完成度如何？`,
-        `返回一个 0.0-1.0 的数字（1.0=完全完成），只返回数字。`,
+        `Task: ${taskDescription}`,
+        `Current state (simulated leaf node): ${state}`,
+        `Please evaluate: if stopping at this state, how complete is the task?`,
+        `Return a single number between 0.0-1.0 (1.0 = fully complete), return only the number.`,
       ].join("\n");
 
       try {
@@ -185,20 +185,20 @@ export function createCognitiveAssessTool(
   return {
     name: "cognitive_assess",
     description:
-      "【必须在规划任何复杂任务前调用】元认知复杂度评估工具。" +
-      "分析当前任务的复杂度，返回认知路由标签：" +
-      "SYSTEM_1_INTUITION（简单任务，直接回答）或" +
-      "SYSTEM_2_FLARE（复杂任务，需调用 flare_plan 进行前瞻规划）。",
+      "[MUST be called before planning any complex task] Meta-cognitive complexity assessment tool. " +
+      "Analyzes the current task's complexity and returns a cognitive routing tag: " +
+      "SYSTEM_1_INTUITION (simple task, respond directly) or " +
+      "SYSTEM_2_FLARE (complex task, requires calling flare_plan for lookahead planning).",
     inputSchema: {
       type: "object",
       properties: {
         userRequest: {
           type: "string",
-          description: "用户的原始请求文本",
+          description: "The user's raw request text",
         },
         conversationContext: {
           type: "string",
-          description: "当前对话的上下文摘要（最近3-5轮）",
+          description: "Current conversation context summary (last 3-5 turns)",
         },
       },
       required: ["userRequest"],
@@ -245,8 +245,8 @@ export function createCognitiveAssessTool(
           dimensions: dimStr,
           instruction:
             metadata.tag === "SYSTEM_2_FLARE"
-              ? "复杂度超过阈值，请立即调用 flare_plan 工具进行前瞻规划，再采取行动。"
-              : "复杂度低，可直接回答或执行，无需前瞻规划。",
+              ? "Complexity exceeds threshold. Call flare_plan tool immediately for lookahead planning before taking action."
+              : "Complexity is low. Respond or execute directly without lookahead planning.",
         }),
       };
     },
@@ -286,21 +286,22 @@ export function createFlarePlanTool(
   return {
     name: "flare_plan",
     description:
-      "【仅在 cognitive_assess 返回 SYSTEM_2_FLARE 时调用】" +
-      "执行 FLARE (Future-aware LookAhead with Reward Estimation) 前瞻规划。" +
-      "在后台构建未来轨迹模拟树，通过反向价值传播选出全局最优的第一步动作，" +
-      "避免自回归贪婪陷阱。返回应立即执行的最优首步行动建议。",
+      "[Call ONLY when cognitive_assess returns SYSTEM_2_FLARE] " +
+      "Execute FLARE (Future-aware LookAhead with Reward Estimation) lookahead planning. " +
+      "Builds a future trajectory simulation tree in the background, selects the globally optimal " +
+      "first action via backward value propagation, avoiding autoregressive greedy traps. " +
+      "Returns the optimal first action to execute immediately.",
     inputSchema: {
       type: "object",
       properties: {
         taskDescription: {
           type: "string",
-          description: "任务的完整目标描述（用于引导 LLM 模拟器）",
+          description: "Full task objective description (used to guide the LLM simulator)",
         },
         currentStateDescription: {
           type: "string",
           description:
-            "当前状态的描述（包括已完成步骤、可用工具、约束条件等）",
+            "Description of current state (including completed steps, available tools, constraints, etc.)",
         },
       },
       required: ["taskDescription"],
@@ -315,7 +316,7 @@ export function createFlarePlanTool(
         buildCurrentStateDescription(ctx.sessionKey, taskDescription);
 
       api.logger.info(
-        "[CognitiveDualEngine] 启动 FLARE 规划",
+        "[CognitiveDualEngine] Starting FLARE planning",
         {
           sessionKey: ctx.sessionKey,
           maxDepth: cfg.flareMaxDepth,
@@ -340,7 +341,7 @@ export function createFlarePlanTool(
           planResult.searchTree,
         );
 
-        api.logger.info("[CognitiveDualEngine] FLARE 规划完成", {
+        api.logger.info("[CognitiveDualEngine] FLARE planning completed", {
           sessionKey: ctx.sessionKey,
           globalValue: planResult.globalValueEstimate.toFixed(3),
           simCount: planResult.simulationCount,
@@ -359,18 +360,18 @@ export function createFlarePlanTool(
             globalValueEstimate: planResult.globalValueEstimate.toFixed(3),
             simulationsRun: planResult.simulationCount,
             instruction:
-              "已完成前瞻规划。请严格按照 bestFirstAction 执行下一步，" +
-              "执行后等待工具结果，再调用 cognitive_assess 决定是否需要重新规划。",
+              "Lookahead planning complete. Execute the next step strictly according to bestFirstAction, " +
+              "then wait for tool results before calling cognitive_assess to decide whether re-planning is needed.",
           }),
         };
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        api.logger.error("[CognitiveDualEngine] FLARE 规划失败", { errMsg });
+        api.logger.error("[CognitiveDualEngine] FLARE planning failed", { errMsg });
         return {
           content: JSON.stringify({
             status: "FLARE_PLAN_FAILED",
             error: errMsg,
-            fallback: "FLARE 规划失败，降级为系统1直接响应。",
+            fallback: "FLARE planning failed, falling back to System 1 direct response.",
           }),
           isError: true,
         };

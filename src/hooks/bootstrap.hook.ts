@@ -1,85 +1,87 @@
 /**
  * @file src/hooks/bootstrap.hook.ts
- * @description agent:bootstrap 钩子处理器
+ * @description agent:bootstrap hook handler
  *
- * 此钩子在 Agent 会话初始化时触发，向 Agent 的 bootstrap 上下文
- * 注入认知路由指令，强制 Agent 在规划前先调用 cognitive_assess 工具。
+ * This hook fires when an Agent session initializes, injecting cognitive
+ * routing instructions into the Agent's bootstrap context. This forces
+ * the Agent to call cognitive_assess before planning any actions.
  *
- * OpenClaw 事件系统说明：
+ * OpenClaw event system:
  *   event.type === "agent" && event.action === "bootstrap"
- *   此事件在 Agent 会话启动时触发（用户首次发送消息或 /new 命令后）。
- *   通过向 event.context.bootstrapFiles 注入 .md 文件，
- *   可以在 Agent 的系统提示中添加自定义指令。
+ *   Fires on Agent session startup (user's first message or /new command).
+ *   By pushing .md files into event.context.bootstrapFiles,
+ *   custom instructions are added to the Agent's system prompt.
  *
- * 语义映射：
- *   设计文档中的 beforeTaskPlanning（注入阶段）→ 本钩子
- *   - 不直接拦截动作生成，而是通过 prompt engineering 强制 Agent 遵循认知路由流程
- *   - Agent 被 bootstrap 指令约束，无法绕过复杂度评估直接行动
+ * Semantic mapping:
+ *   Design doc's beforeTaskPlanning (injection phase) → this hook
+ *   - Does not intercept action generation directly; instead uses prompt
+ *     engineering to constrain the Agent to follow the cognitive routing flow
  */
 
 import type { OpenClawHookEvent } from "../types.js";
 
 /**
- * 注入到 Agent bootstrap 上下文的认知路由指令
+ * Cognitive routing instructions injected into the Agent's bootstrap context.
  *
- * 此指令文件会被 OpenClaw 作为 SKILL.md 类文件注入 Agent 对话的系统提示中，
- * 使 Agent 在每次收到用户请求时，必须按照指定流程行动。
+ * This instruction file is injected by OpenClaw as a SKILL.md-type file into
+ * the Agent conversation's system prompt, ensuring the Agent follows the
+ * specified workflow whenever it receives a user request.
  */
-const COGNITIVE_ROUTING_SKILL = `## 【强制执行】认知路由规范 (Cognitive Routing Protocol)
+const COGNITIVE_ROUTING_SKILL = `## [MANDATORY] Cognitive Routing Protocol
 
-你已装载「认知双引擎路由插件」，必须严格遵循以下协议处理所有任务：
+You have the "Cognitive Dual Engine" routing plugin loaded. You MUST strictly follow this protocol for ALL tasks:
 
-### 规范流程
+### Required Workflow
 
-1. **步骤 1：元认知评估（必须）**
-   收到任何用户请求后，**首先**调用 \`cognitive_assess\` 工具：
-   - 输入参数 \`userRequest\`：用户的原始请求文本
-   - 输入参数 \`conversationContext\`：近期对话上下文摘要（最近 3-5 轮）
+1. **Step 1: Meta-cognitive Assessment (MANDATORY)**
+   Upon receiving ANY user request, **first** call the \`cognitive_assess\` tool:
+   - Input \`userRequest\`: the user's raw request text
+   - Input \`conversationContext\`: recent conversation context summary (last 3-5 turns)
 
-2. **步骤 2：路由决策**
-   根据 \`cognitive_assess\` 返回的 \`tag\` 字段决定后续行为：
+2. **Step 2: Routing Decision**
+   Based on the \`tag\` field returned by \`cognitive_assess\`:
 
-   - **SYSTEM_1_INTUITION**（系统1·直觉路径）：
-     复杂度低，可直接分析并响应，无需额外规划。
-     直接按照自身推理能力完成任务。
+   - **SYSTEM_1_INTUITION** (System 1 · Intuition path):
+     Complexity is low — analyze and respond directly without additional planning.
+     Complete the task using your own reasoning capabilities.
 
-   - **SYSTEM_2_FLARE**（系统2·前瞻规划路径）：
-     复杂度高，**必须**接着调用 \`flare_plan\` 工具进行前瞻规划：
-     - 输入 \`taskDescription\`：任务的完整目标描述
-     - 输入 \`currentStateDescription\`：当前状态描述
-     - 按照返回的 \`bestFirstAction\` 严格执行第一步动作
+   - **SYSTEM_2_FLARE** (System 2 · Lookahead planning path):
+     Complexity is high — you **MUST** then call the \`flare_plan\` tool for lookahead planning:
+     - Input \`taskDescription\`: full description of the task objective
+     - Input \`currentStateDescription\`: description of current state
+     - Execute strictly the first action from the returned \`bestFirstAction\`
 
-3. **步骤 3：滚动规划**
-   每次执行工具动作后：
-   - 如果任务尚未完成，重新调用 \`cognitive_assess\` 重新评估
-   - 根据新评估结果决定是直接继续还是重新调用 \`flare_plan\`
-   - 每一步都基于最新真实状态重新规划，不依赖过期假设
+3. **Step 3: Rolling Re-planning**
+   After each tool action execution:
+   - If the task is not yet complete, call \`cognitive_assess\` again to re-evaluate
+   - Based on the new assessment, decide whether to proceed directly or call \`flare_plan\` again
+   - Each step re-plans from the latest real state — never rely on stale hypotheses
 
-### 违规警告
-跳过 \`cognitive_assess\` 直接行动，将导致系统性的「贪婪近视错误」
-(step-wise greedy policy failure)——你可能在局部看似合理的路径上越走越远，
-而全局最优解需要在早期做出不同的选择。
+### Violation Warning
+Skipping \`cognitive_assess\` and acting directly will cause systematic "greedy myopia errors"
+(step-wise greedy policy failure) — you may drift further down a locally plausible path
+while the globally optimal solution requires different early-stage choices.
 `;
 
 /**
- * bootstrapHookHandler — agent:bootstrap 事件处理器
+ * bootstrapHookHandler — agent:bootstrap event handler
  *
- * @param event OpenClaw 钩子事件对象
+ * @param event OpenClaw hook event object
  */
 export async function bootstrapHookHandler(
     event: OpenClawHookEvent,
 ): Promise<void> {
-    // 仅处理 agent:bootstrap 事件
+    // Only handle agent:bootstrap events
     if (event.type !== "agent" || event.action !== "bootstrap") {
         return;
     }
 
-    // 初始化 bootstrapFiles 数组（如不存在则创建）
+    // Initialize bootstrapFiles array if it doesn't exist
     if (!event.context.bootstrapFiles) {
         event.context.bootstrapFiles = [];
     }
 
-    // 注入认知路由指令到 Agent 系统提示
+    // Inject cognitive routing instructions into Agent system prompt
     event.context.bootstrapFiles.push({
         path: "COGNITIVE_ROUTING.md",
         content: COGNITIVE_ROUTING_SKILL,

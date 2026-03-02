@@ -1,25 +1,24 @@
 /**
  * @file index.ts
- * @description CognitiveDualEngine 插件入口
+ * @description CognitiveDualEngine plugin entry point
  *
- * OpenClaw 插件注册规范（来自官方文档 docs.openclaw.ai/tools/plugin）：
- *   插件导出一个函数 `(api) => void` 或对象 `{ id, register(api) {} }`
- *   api.registerTool()     注册 Agent 可调用工具
- *   api.registerService()  注册后台服务
- *   api.registerCommand()  注册斜杠命令
- *   registerPluginHooksFromDir() 注册 Hook 处理器
+ * OpenClaw plugin registration spec (per docs.openclaw.ai/tools/plugin):
+ *   Plugin exports a function `(api) => void` or object `{ id, register(api) {} }`
+ *   api.registerTool()     — register Agent-callable tools
+ *   api.registerService()  — register background services
+ *   api.registerCommand()  — register slash commands
+ *   registerPluginHooksFromDir() — register hook handlers
  *
- * 本插件实现「beforeTaskPlanning / onActionGeneration / afterActionExecution」
- * 三个语义阶段的方式：
+ * This plugin implements three semantic phases:
  *
- *   语义阶段                   OpenClaw 实现载体
- *   ─────────────────────────────────────────────────
+ *   Semantic Phase              OpenClaw Implementation
+ *   ─────────────────────────────────────────────────────
  *   beforeTaskPlanning    →  cognitive_assess tool
- *                            + agent:bootstrap 钩子注入 SKILL.md 指令
+ *                            + agent:bootstrap hook (injects SKILL.md)
  *   onActionGeneration    →  flare_plan tool
- *                            (SYSTEM_1 分支直接放行，SYSTEM_2 调用此工具)
- *   afterActionExecution  →  tool_result_persist 钩子
- *                            (执行 Limited Commitment 状态清理)
+ *                            (SYSTEM_1 fast path; SYSTEM_2 invokes this tool)
+ *   afterActionExecution  →  tool_result_persist hook
+ *                            (Limited Commitment state cleanup)
  */
 
 import type {
@@ -33,7 +32,7 @@ import { bootstrapHookHandler } from "./src/hooks/bootstrap.hook.js";
 import { persistHookHandler } from "./src/hooks/persist.hook.js";
 
 // ------------------------------------------------------------------
-// 默认配置（若 openclaw.plugin.json 未提供，则使用此值）
+// Default config (used when openclaw.plugin.json provides no overrides)
 // ------------------------------------------------------------------
 const DEFAULT_CONFIG: CognitiveDualEngineConfig = {
   system2Threshold: 0.55,
@@ -44,10 +43,10 @@ const DEFAULT_CONFIG: CognitiveDualEngineConfig = {
 };
 
 // ------------------------------------------------------------------
-// 插件注册主函数（符合 OpenClaw 官方 Plugin API 规范）
+// Plugin registration entry (conforms to OpenClaw Plugin API spec)
 // ------------------------------------------------------------------
 export default function register(api: OpenClawPluginApi): void {
-  // 读取并合并插件配置
+  // Merge user config with defaults
   const rawCfg = (api.config as Partial<CognitiveDualEngineConfig>) ?? {};
   const cfg: CognitiveDualEngineConfig = {
     ...DEFAULT_CONFIG,
@@ -55,78 +54,66 @@ export default function register(api: OpenClawPluginApi): void {
   };
 
   if (!cfg.enabled) {
-    api.logger.info("[CognitiveDualEngine] 插件已禁用，跳过注册");
+    api.logger.info("[CognitiveDualEngine] Plugin disabled, skipping registration");
     return;
   }
 
-  api.logger.info("[CognitiveDualEngine] 初始化双引擎认知路由插件", {
+  api.logger.info("[CognitiveDualEngine] Initializing dual-engine cognitive routing plugin", {
     system2Threshold: cfg.system2Threshold,
     flareMaxDepth: cfg.flareMaxDepth,
     flareBranchFactor: cfg.flareBranchFactor,
   });
 
   // ================================================================
-  // 1. 注册 Agent Tool：cognitive_assess
-  //    语义对应：beforeTaskPlanning（元认知计算 + 复杂度评分 + 路由标签）
+  // 1. Register Agent Tool: cognitive_assess
+  //    Semantic mapping: beforeTaskPlanning (meta-cognition + scoring + routing)
   // ================================================================
   api.registerTool(createCognitiveAssessTool(cfg));
-  api.logger.info("[CognitiveDualEngine] ✓ 注册工具: cognitive_assess");
+  api.logger.info("[CognitiveDualEngine] ✓ Tool registered: cognitive_assess");
 
   // ================================================================
-  // 2. 注册 Agent Tool：flare_plan
-  //    语义对应：onActionGeneration 的 SYSTEM_2 分支
-  //              （显式前瞻 + 反向价值传播 + 有限承诺）
+  // 2. Register Agent Tool: flare_plan
+  //    Semantic mapping: onActionGeneration SYSTEM_2 branch
+  //    (explicit lookahead + backward value propagation + limited commitment)
   // ================================================================
   api.registerTool(createFlarePlanTool(api, cfg));
-  api.logger.info("[CognitiveDualEngine] ✓ 注册工具: flare_plan");
+  api.logger.info("[CognitiveDualEngine] ✓ Tool registered: flare_plan");
 
   // ================================================================
-  // 3. 注册后台服务：状态管理器
-  //    负责会话生命周期内的 RollingPlanState 维护
-  //    启动时初始化，停止时批量清理所有会话状态
+  // 3. Register background service: state manager
+  //    Manages RollingPlanState lifecycle across sessions
   // ================================================================
   api.registerService(createStateManagerService(api));
-  api.logger.info("[CognitiveDualEngine] ✓ 注册服务: state-manager");
+  api.logger.info("[CognitiveDualEngine] ✓ Service registered: state-manager");
 
   // ================================================================
-  // 4. 注册钩子（通过 OpenClaw 真实 Hook 系统）
+  // 4. Register hooks (via OpenClaw Hook system)
   //
-  //    两个钩子对应三个语义阶段中的两个：
-  //    - agent:bootstrap       → beforeTaskPlanning（注入阶段）
-  //    - tool_result_persist   → afterActionExecution（状态清理）
-  //
-  //    实现文件分别位于：
-  //    - src/hooks/bootstrap.hook.ts
-  //    - src/hooks/persist.hook.ts
-  //
-  //    注册方式：在 OpenClaw 中，钩子可通过 api.registerHook 注册，
-  //    或通过 registerPluginHooksFromDir("./hooks/") 自动扫描注册。
-  //    此处采用显式注册以确保参数控制：
+  //    Two hooks mapping to two semantic phases:
+  //    - agent:bootstrap       → beforeTaskPlanning (injection phase)
+  //    - tool_result_persist   → afterActionExecution (state cleanup)
   // ================================================================
 
-  // Hook A: agent:bootstrap — 注入认知路由指令到 Agent 系统提示
   if (typeof api.registerHook === "function") {
     api.registerHook("agent:bootstrap", bootstrapHookHandler);
-    api.logger.info("[CognitiveDualEngine] ✓ 注册钩子: agent:bootstrap");
+    api.logger.info("[CognitiveDualEngine] ✓ Hook registered: agent:bootstrap");
 
     api.registerHook("tool_result_persist", persistHookHandler);
-    api.logger.info("[CognitiveDualEngine] ✓ 注册钩子: tool_result_persist");
+    api.logger.info("[CognitiveDualEngine] ✓ Hook registered: tool_result_persist");
   } else {
-    // 降级方案：如果 api.registerHook 不可用（老版本 OpenClaw），
-    // 在日志中提示用户改用 registerPluginHooksFromDir
     api.logger.warn(
-      "[CognitiveDualEngine] api.registerHook 不可用，" +
-      "请确保 OpenClaw 版本 ≥ 2025.0.0，或使用 registerPluginHooksFromDir('./hooks') 注册钩子。",
+      "[CognitiveDualEngine] api.registerHook unavailable. " +
+      "Ensure OpenClaw version >= 2025.0.0, or use registerPluginHooksFromDir('./hooks').",
     );
   }
 
   // ================================================================
-  // 5. 注册管理命令 /cogstatus
-  //    用于查看当前会话的认知路由状态
+  // 5. Register management command: /cogstatus
+  //    View current cognitive routing state for the session
   // ================================================================
   api.registerCommand({
     name: "cogstatus",
-    description: "查看当前会话的认知路由状态（元认知评分 + 规划步数）",
+    description: "View current cognitive routing state (meta-cognition score + plan steps)",
     acceptsArgs: false,
     requireAuth: true,
     handler(ctx) {
@@ -136,29 +123,29 @@ export default function register(api: OpenClawPluginApi): void {
       if (!state) {
         return {
           text:
-            "🧠 认知双引擎状态：会话未初始化\n" +
-            "请发送任意消息触发 agent:bootstrap 后重试。",
+            "🧠 Cognitive Dual Engine Status: Session not initialized\n" +
+            "Send any message to trigger agent:bootstrap, then retry.",
         };
       }
 
       const meta = state.lastCognitiveMetadata;
       const tagEmoji =
-        meta?.tag === "SYSTEM_2_FLARE" ? "⚡ 系统2(FLARE)" : "💨 系统1(直觉)";
+        meta?.tag === "SYSTEM_2_FLARE" ? "⚡ System 2 (FLARE)" : "💨 System 1 (Intuition)";
 
       return {
         text:
-          `🧠 **认知双引擎状态**\n` +
-          `会话: ${sessionKey}\n` +
-          `当前路由: ${tagEmoji}\n` +
-          `复杂度分: ${meta?.complexity.score.toFixed(3) ?? "未评估"}\n` +
-          `置信度: ${meta?.complexity.confidence.toFixed(2) ?? "N/A"}\n` +
-          `规划步数: ${state.stepCount}\n` +
-          `未提交假设数: ${state.uncommittedHypotheses.length}\n` +
-          `最新观测: ${state.latestObservation.slice(0, 80) || "无"}\n` +
-          `\n触发阈值: ${cfg.system2Threshold} | FLARE深度: ${cfg.flareMaxDepth} | 分支因子: ${cfg.flareBranchFactor}`,
+          `🧠 **Cognitive Dual Engine Status**\n` +
+          `Session: ${sessionKey}\n` +
+          `Current route: ${tagEmoji}\n` +
+          `Complexity score: ${meta?.complexity.score.toFixed(3) ?? "Not assessed"}\n` +
+          `Confidence: ${meta?.complexity.confidence.toFixed(2) ?? "N/A"}\n` +
+          `Plan steps: ${state.stepCount}\n` +
+          `Uncommitted hypotheses: ${state.uncommittedHypotheses.length}\n` +
+          `Latest observation: ${state.latestObservation.slice(0, 80) || "None"}\n` +
+          `\nThreshold: ${cfg.system2Threshold} | FLARE depth: ${cfg.flareMaxDepth} | Branch factor: ${cfg.flareBranchFactor}`,
       };
     },
   });
 
-  api.logger.info("[CognitiveDualEngine] ✓ 双引擎认知路由插件注册完成");
+  api.logger.info("[CognitiveDualEngine] ✓ Dual-engine cognitive routing plugin registered");
 }
