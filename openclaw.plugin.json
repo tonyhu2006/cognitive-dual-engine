@@ -1,0 +1,46 @@
+{
+  "id": "cognitive-dual-engine",
+  "name": "Cognitive Dual Engine Plugin",
+  "version": "1.0.0",
+  "description": "系统1/系统2双引擎认知路由插件。基于DeepMind表征几何学研究与Stanford FLARE规划框架，在OpenClaw事件循环层面实现自动复杂度路由与前瞻规划。",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "system2Threshold": {
+        "type": "number",
+        "default": 0.55,
+        "description": "触发系统2 FLARE规划的综合复杂度阈值 (0.0-1.0)"
+      },
+      "flareMaxDepth": {
+        "type": "integer",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 6,
+        "description": "FLARE前瞻树最大深度k。越深=越好的全局视野，但token消耗线性增长。"
+      },
+      "flareBranchFactor": {
+        "type": "integer",
+        "default": 3,
+        "minimum": 2,
+        "maximum": 5,
+        "description": "每节点最大候选动作扩展数。论文建议配合action pruning控制搜索空间。"
+      },
+      "flareSimulationsPerNode": {
+        "type": "integer",
+        "default": 2,
+        "description": "每节点轨迹模拟次数，用于UCB统计估计的方差控制。"
+      },
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "uiHints": {
+    "system2Threshold": { "label": "系统2触发阈值", "placeholder": "0.55" },
+    "flareMaxDepth": { "label": "FLARE前瞻深度", "placeholder": "3" },
+    "flareBranchFactor": { "label": "FLARE分支因子", "placeholder": "3" },
+    "flareSimulationsPerNode": { "label": "每节点模拟次数", "placeholder": "2" }
+  }
+}

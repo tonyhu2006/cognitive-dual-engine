@@ -1,0 +1,9 @@
+src/
+*.ts
+!dist/**/*.d.ts
+tsconfig.json
+.gitignore
+*.pdf
+.vscode/
+.idea/
+node_modules/
