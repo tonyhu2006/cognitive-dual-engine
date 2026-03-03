@@ -1,6 +1,6 @@
 {
   "name": "cognitive-dual-engine",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "OpenClaw plugin: System 1/System 2 cognitive routing with FLARE planning engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

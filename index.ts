@@ -158,5 +158,139 @@ export default function register(api: OpenClawPluginApi): void {
     },
   });
 
+  // ================================================================
+  // 6. Register tuning command: /cogtune
+  //    Adjust FLARE engine parameters at runtime
+  // ================================================================
+  api.registerCommand({
+    name: "cogtune",
+    description: "Adjust cognitive engine parameters at runtime (threshold, depth, branch, simulations, or apply a preset)",
+    acceptsArgs: true,
+    requireAuth: true,
+    handler(ctx) {
+      const raw = (ctx.args ?? "").trim();
+
+      // --- No args: show current config + estimated LLM calls ---
+      if (!raw) {
+        const est = estimateLLMCalls(cfg);
+        return {
+          text:
+            `⚙️ **Cognitive Dual Engine — Current Configuration**\n` +
+            `\n` +
+            `| Parameter | Value |\n` +
+            `|-----------|-------|\n` +
+            `| system2Threshold | ${cfg.system2Threshold} |\n` +
+            `| flareMaxDepth | ${cfg.flareMaxDepth} |\n` +
+            `| flareBranchFactor | ${cfg.flareBranchFactor} |\n` +
+            `| flareSimulationsPerNode | ${cfg.flareSimulationsPerNode} |\n` +
+            `\n` +
+            `📊 Estimated LLM calls per FLARE invocation: **~${est}**\n` +
+            `\n` +
+            `Usage:\n` +
+            `  /cogtune threshold 0.75\n` +
+            `  /cogtune depth 2\n` +
+            `  /cogtune branch 2\n` +
+            `  /cogtune simulations 1\n` +
+            `  /cogtune preset minimal|balanced|thorough\n` +
+            `  /cogtune reset`,
+        };
+      }
+
+      const parts = raw.split(/\s+/);
+      const subcommand = parts[0].toLowerCase();
+      const value = parts[1];
+
+      // --- Presets ---
+      if (subcommand === "preset") {
+        const presets: Record<string, Partial<CognitiveDualEngineConfig>> = {
+          minimal: { system2Threshold: 0.80, flareMaxDepth: 1, flareBranchFactor: 2, flareSimulationsPerNode: 1 },
+          balanced: { system2Threshold: 0.55, flareMaxDepth: 2, flareBranchFactor: 2, flareSimulationsPerNode: 1 },
+          thorough: { system2Threshold: 0.40, flareMaxDepth: 3, flareBranchFactor: 3, flareSimulationsPerNode: 2 },
+        };
+        const presetName = (value ?? "").toLowerCase();
+        const preset = presets[presetName];
+        if (!preset) {
+          return { text: `❌ Unknown preset "${value}". Available: minimal, balanced, thorough` };
+        }
+        Object.assign(cfg, preset);
+        const est = estimateLLMCalls(cfg);
+        return {
+          text:
+            `✅ Applied preset **${presetName}**\n` +
+            `threshold=${cfg.system2Threshold} | depth=${cfg.flareMaxDepth} | branch=${cfg.flareBranchFactor} | sims=${cfg.flareSimulationsPerNode}\n` +
+            `📊 Estimated LLM calls per FLARE: **~${est}**`,
+        };
+      }
+
+      // --- Reset to defaults ---
+      if (subcommand === "reset") {
+        Object.assign(cfg, DEFAULT_CONFIG);
+        const est = estimateLLMCalls(cfg);
+        return {
+          text:
+            `🔄 Reset to defaults\n` +
+            `threshold=${cfg.system2Threshold} | depth=${cfg.flareMaxDepth} | branch=${cfg.flareBranchFactor} | sims=${cfg.flareSimulationsPerNode}\n` +
+            `📊 Estimated LLM calls per FLARE: **~${est}**`,
+        };
+      }
+
+      // --- Set individual parameter ---
+      const paramMap: Record<string, { key: keyof CognitiveDualEngineConfig; min: number; max: number; isFloat?: boolean }> = {
+        threshold: { key: "system2Threshold", min: 0.1, max: 0.99, isFloat: true },
+        depth: { key: "flareMaxDepth", min: 1, max: 5 },
+        branch: { key: "flareBranchFactor", min: 1, max: 5 },
+        simulations: { key: "flareSimulationsPerNode", min: 1, max: 5 },
+        sims: { key: "flareSimulationsPerNode", min: 1, max: 5 },
+      };
+
+      const paramInfo = paramMap[subcommand];
+      if (!paramInfo) {
+        return { text: `❌ Unknown parameter "${subcommand}". Available: threshold, depth, branch, simulations, preset, reset` };
+      }
+
+      const num = paramInfo.isFloat ? parseFloat(value) : parseInt(value, 10);
+      if (isNaN(num)) {
+        return { text: `❌ Invalid value "${value}". Expected a number.` };
+      }
+
+      const clamped = Math.max(paramInfo.min, Math.min(paramInfo.max, num));
+      (cfg as any)[paramInfo.key] = paramInfo.isFloat ? clamped : Math.round(clamped);
+
+      const est = estimateLLMCalls(cfg);
+      return {
+        text:
+          `✅ Set **${paramInfo.key}** = ${(cfg as any)[paramInfo.key]}` +
+          (clamped !== num ? ` (clamped from ${num}, range: ${paramInfo.min}-${paramInfo.max})` : ``) +
+          `\n📊 Estimated LLM calls per FLARE: **~${est}**`,
+      };
+    },
+  });
+  api.logger.info("[CognitiveDualEngine] ✓ Command registered: /cogtune");
+
   api.logger.info("[CognitiveDualEngine] ✓ Dual-engine cognitive routing plugin registered");
+}
+
+// ------------------------------------------------------------------
+// Helper: estimate total LLM API calls per single flare_plan invocation
+// ------------------------------------------------------------------
+function estimateLLMCalls(cfg: CognitiveDualEngineConfig): number {
+  const d = cfg.flareMaxDepth;
+  const b = cfg.flareBranchFactor;
+  const s = cfg.flareSimulationsPerNode;
+
+  // Non-leaf nodes = sum of b^i for i=0..d-1
+  let nonLeafNodes = 0;
+  for (let i = 0; i < d; i++) nonLeafNodes += Math.pow(b, i);
+
+  // Leaf nodes = b^d
+  const leafNodes = Math.pow(b, d);
+
+  // generateActionCandidates: 1 per non-leaf node
+  const generateCalls = nonLeafNodes;
+  // simulateStateTransition: b * s per non-leaf node
+  const simCalls = nonLeafNodes * b * s;
+  // evaluateTerminalValue: 1 per leaf node
+  const evalCalls = leafNodes;
+
+  return generateCalls + simCalls + evalCalls;
 }
