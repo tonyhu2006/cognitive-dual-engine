@@ -310,7 +310,7 @@ export interface OpenClawPluginApi {
    * 注册事件钩子处理器（可选——部分 OpenClaw 版本可能不提供此方法）
    * 事件名称示例："agent:bootstrap", "tool_result_persist"
    */
-  registerHook?(eventName: string, handler: Function): void;
+  registerHook?(eventName: string, handler: Function, opts?: { name?: string }): void;
   runtime: {
     tts?: unknown;
     [key: string]: unknown;
