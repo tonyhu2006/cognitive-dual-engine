@@ -95,10 +95,10 @@ export default function register(api: OpenClawPluginApi): void {
   // ================================================================
 
   if (typeof api.registerHook === "function") {
-    api.registerHook("agent:bootstrap", bootstrapHookHandler);
+    api.registerHook("agent:bootstrap", bootstrapHookHandler, { name: "cognitive-dual-engine:bootstrap" });
     api.logger.info("[CognitiveDualEngine] ✓ Hook registered: agent:bootstrap");
 
-    api.registerHook("tool_result_persist", persistHookHandler);
+    api.registerHook("tool_result_persist", persistHookHandler, { name: "cognitive-dual-engine:persist" });
     api.logger.info("[CognitiveDualEngine] ✓ Hook registered: tool_result_persist");
   } else {
     api.logger.warn(
